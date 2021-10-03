@@ -11,8 +11,8 @@ from matplotlib import pyplot
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-images_folder = "C:/Users/justi/Desktop/Bilder Hochzeit 28.08.2021/"
-target_image = images_folder + "_MG_7753.JPG"
+images_folder = "C:/Users/justi/Desktop/Bilder Hochzeit/"
+target_image = images_folder + "_MG_6552.JPG"
 
 filenames = glob.glob(images_folder+"*.JPG")
 
@@ -24,8 +24,8 @@ insertion_subdivisions = 256
 
 image_ratio = target_tensor.shape[2]/target_tensor.shape[1]
 
-search_preprocess = False
-insertion_preprocess = False
+search_preprocess = True
+insertion_preprocess = True
 
 def print_progress(current, max, start_time=0):
     percent=current/max
@@ -52,7 +52,7 @@ def compute_averages(img_path, subdivisions):
 
     avgpool = nn.AvgPool2d((sub_height, sub_width), stride=(sub_height, sub_width))#, stride=(sub_height, sub_width)).to(device)  # avgpool over every channel to get "subpatch" average
 
-    avg_colors = avgpool(img_tensor).swapaxes(0, 1).swapaxes(1, 2)/256
+    avg_colors = avgpool(img_tensor).swapaxes(0, 1).swapaxes(1, 2).type(torch.uint8)
 
     return avg_colors
 
@@ -62,8 +62,8 @@ def generate_nearest_set(target_patch, average_matrix): # this function should c
 
     assert average_matrix.shape[1]==target_patch.shape[1], f"Dimensionality mismatch: average_matrix.shape={average_matrix.shape}; target_patch.shape={target_patch.shape}"
 
-    similarity_matrix = ((average_matrix-target_patch)**2).sum(dim=1)
-    _, top_indices = torch.topk(similarity_matrix, 5, largest=False)
+    similarity_matrix = (((average_matrix-target_patch).float()/256)**2).sum(dim=1)
+    _, top_indices = torch.topk(similarity_matrix, 1, largest=False)
     top_indices = top_indices.cpu()
     #selection = random.randint(0, 4)
     #top_indices[0]=top_indices[selection]
@@ -82,7 +82,6 @@ if search_preprocess:
 else:
     try:
         average_matrix = torch.load(f"average_matrix_cache_{search_subdivisions}.pt")
-
     except:
         print("No cached tensors found. Aborting...")
         exit(-1)
