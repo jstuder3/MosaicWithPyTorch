@@ -1,4 +1,5 @@
 from torchvision.io import read_image, write_png, write_jpeg
+from torchvision.transforms.functional import to_pil_image, to_tensor
 from torchvision.transforms import Resize
 import torch.nn as nn
 import torch
@@ -6,25 +7,28 @@ import sys
 import time
 import glob
 import random
+import numpy as np
+from PIL import Image
 
 from matplotlib import pyplot
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-images_folder = "C:/Users/justi/Desktop/Bilder Hochzeit/"
-target_image = images_folder + "_MG_6552.JPG"
+images_folder = "C:/Users/justi/Desktop/MosaicWithPyTorch/AlleBilder/"
+target_image = images_folder + "hochzytfotos_280821_270.JPG"
 
 filenames = glob.glob(images_folder+"*.JPG")
 
-target_tensor = read_image(target_image).to(device)
+target_tensor = read_image(target_image).to(device)#torch.from_numpy(np.array(to_pil_image(read_image(target_image), mode="YCbCr"))/256).transpose(0, 2).transpose(1, 2).to(device)#
 
-target_subdivisions = 128
-search_subdivisions = 2
-insertion_subdivisions = 256
+target_subdivisions = 224 #number of "subpatches" that the target image will be divided into (changing this requires no re-preprocessing)
+search_subdivisions = 2 #number of subdivisions of a single search patch
+insertion_subdivisions = 160 #final resolution of the inserted mini-images
+num_samples = 5 #the top-k similar samples from which one will be chosen with a probability distribution based on the normalized reciprocal colour difference
 
-image_ratio = target_tensor.shape[2]/target_tensor.shape[1]
+image_ratio = round(target_tensor.shape[2]/target_tensor.shape[1], 2)
 
-search_preprocess = True
+search_preprocess = False
 insertion_preprocess = True
 
 def print_progress(current, max, start_time=0):
@@ -37,7 +41,7 @@ def print_progress(current, max, start_time=0):
     sys.stdout.flush()
 
 def compute_averages(img_path, subdivisions):
-    img_tensor = read_image(img_path).float().to(device)
+    img_tensor = read_image(img_path).float().to(device)#torch.from_numpy(np.array(to_pil_image(read_image(img_path), mode="YCbCr"))/256).transpose(0, 2).transpose(1, 2).float().to(device)
 
     #resize to better-divisible resulution
     resizer = Resize((3584, 5376), antialias=True)
@@ -62,11 +66,33 @@ def generate_nearest_set(target_patch, average_matrix): # this function should c
 
     assert average_matrix.shape[1]==target_patch.shape[1], f"Dimensionality mismatch: average_matrix.shape={average_matrix.shape}; target_patch.shape={target_patch.shape}"
 
-    similarity_matrix = (((average_matrix-target_patch).float()/256)**2).sum(dim=1)
-    _, top_indices = torch.topk(similarity_matrix, 1, largest=False)
+    #compute similarity, based on formula from https://en.wikipedia.org/wiki/Color_difference
+
+    target_patch = target_patch.reshape(target_patch.shape[0], 4, -1)
+    average_matrix = average_matrix.reshape(average_matrix.shape[0], 4, -1)
+
+    redmean = (average_matrix[:, :, 0]+target_patch[:, :, 0])/2
+    deltared = (average_matrix[:, :, 0]-target_patch[:, :, 0])**2
+    deltagreen = (average_matrix[:, :, 1]-target_patch[:, :, 1])**2
+    deltablue = (average_matrix[:, :, 2]-target_patch[:, :, 2])**2
+
+    redfactor = (2+redmean/256)
+    greenfactor = 4
+    bluefactor = (2+(255-redmean)/256)
+
+    similarity_matrix = torch.sum(torch.sqrt(redfactor * deltared + greenfactor * deltagreen + bluefactor * deltablue), dim=1)
+
+    #similarity_matrix = (((average_matrix-target_patch).float()/256)**2).sum(dim=1)
+    similarity_values, top_indices = torch.topk(similarity_matrix, num_samples, largest=False)
+
+    similarity_values=similarity_values.cpu()
+    similarity_values = 1/similarity_values # the image with the smallest difference in colour should have the highest probability of being drawn
     top_indices = top_indices.cpu()
-    #selection = random.randint(0, 4)
-    #top_indices[0]=top_indices[selection]
+
+    similarity_values = similarity_values/torch.sum(similarity_values) #normalize draw probability
+    choice=np.random.choice(np.arange(0, num_samples), p=similarity_values.numpy())
+
+    top_indices = torch.tensor([top_indices[choice]])
 
     return top_indices
 
@@ -132,8 +158,10 @@ start_time=time.time()
 for j in range(int(target_downsampled.shape[0]/search_subdivisions)):
     for i in range(int(target_downsampled.shape[1]/search_subdivisions)):
         #output_tensor[j*search_subdivisions:(j+1)*search_subdivisions, i*int(image_ratio*search_subdivisions):(i+1)*int(image_ratio*search_subdivisions)] = average_matrix[nearest_indices[i+j*target_subdivisions]]
-
+        #try:
         output_tensor[j*insertion_height:(j+1)*insertion_height, i*insertion_width:(i+1)*insertion_width, :] = insertion_matrix[nearest_indices[i+j*int(target_downsampled.shape[0]/search_subdivisions)]]
+        #except:
+        #    print("Error occured...")
         print_progress(i+j*int(target_downsampled.shape[0]/search_subdivisions)+1, int(target_downsampled.shape[0]/search_subdivisions)**2, start_time)
 
 output_tensor = output_tensor.swapaxes(2, 1).swapaxes(1, 0).type(torch.uint8)
