@@ -1,6 +1,10 @@
 # MosaicWithPyTorch
 Recreate your images using other images.
 
+## Example
+
+![Mosaic example](https://user-images.githubusercontent.com/87820315/144145636-ceb159ed-609c-4690-9790-95f5ecf1ea02.png)
+
 ## Usage:
 
 In main.py, set the "images_folder" to the folder where all of your images are located in. 
